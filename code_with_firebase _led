@@ -1,0 +1,60 @@
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+
+// WiFi credentials
+#define WIFI_SSID "Alamin"
+#define WIFI_PASSWORD "01788392063"
+
+// Firebase project credentials
+#define API_KEY "AIzaSyCjSPZ-UaiINwJW4iRfFF3zkvhbTEz54CA"
+#define DATABASE_URL "https://umbrashare-2b099-default-rtdb.firebaseio.com"
+#define USER_EMAIL "itstamim.ban@gmail.com"
+#define USER_PASSWORD "zl3T5HIMGMeMbxbUrdWzl3tRPD26a8SKN9HIkahJ" // যদি Secret password হিসেবে সেট করা হয়
+
+#define LED_PIN 25
+
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+
+  // Connect WiFi
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println();
+  Serial.println("WiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectNetwork(true);
+}
+
+void loop() {
+  // Read LED status from Firebase
+  if (Firebase.RTDB.getInt(&fbdo, "/ESP32/LED_Status")) {
+    int ledState = fbdo.intData();
+    digitalWrite(LED_PIN, ledState == 1 ? HIGH : LOW);
+    Serial.print("LED Status: ");
+    Serial.println(ledState);
+  } else {
+    Serial.print("Failed to get LED status: ");
+    Serial.println(fbdo.errorReason());
+  }
+  delay(1000);
+}
