@@ -1,80 +1,139 @@
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
-#include <addons/TokenHelper.h>
-#include <addons/RTDBHelper.h>
+#include <DFRobotDFPlayerMini.h>
+#include <HardwareSerial.h>
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
 
-// WiFi credentials
+// ====================== WiFi & Firebase ======================
 #define WIFI_SSID "Alamin"
 #define WIFI_PASSWORD "01788392063"
+#define DATABASE_URL "https://esp32t-fbb3f-default-rtdb.firebaseio.com/"
 
-// Firebase project credentials
-#define API_KEY "AIzaSyCjSPZ-UaiINwJW4iRfFF3zkvhbTEz54CA"
-#define DATABASE_URL "https://umbrashare-2b099-default-rtdb.firebaseio.com"
-#define USER_EMAIL "itstamim.ban@gmail.com"
-#define USER_PASSWORD "zl3T5HIMGMeMbxbUrdWzl3tRPD26a8SKN9HIkahJ" // যদি Secret password হিসেবে সেট করা হয়
-
-#define LED_PIN 25
-
+// Firebase setup
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
+// ====================== Pin Configuration ======================
+#define RELAY_PIN 25       // Lock/Unlock Relay
+#define RED_LED 26         // Locked indicator
+#define GREEN_LED 27       // Unlocked indicator
+#define IR_SENSOR 33       // IR obstacle sensor input
+
+// ====================== DFPlayer Setup ======================
+HardwareSerial mySerial(1);
+DFRobotDFPlayerMini dfPlayer;
+
+// ====================== Variables ======================
+bool umbrellaPresent = true;
+String unlockSignal = "off";
+
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
+  mySerial.begin(9600, SERIAL_8N1, 16, 17);  // RX=16, TX=17 for DFPlayer
 
-  // Connect WiFi
+  // Pin modes
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+  pinMode(IR_SENSOR, INPUT);
+
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RED_LED, HIGH);
+  digitalWrite(GREEN_LED, LOW);
+
+  // DFPlayer initialize
+  Serial.println("Initializing DFPlayer...");
+  if (!dfPlayer.begin(mySerial)) {
+    Serial.println("Unable to start DFPlayer Mini!");
+    while (true);
+  }
+  dfPlayer.volume(25); // Volume 0–30
+  dfPlayer.play(3);    // System startup sound
+  Serial.println("System Started - Sound 3 Played");
+
+  // WiFi connect
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
     delay(500);
+    Serial.print(".");
   }
-  Serial.println();
-  Serial.println("WiFi Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  Serial.println("\n✅ WiFi Connected");
 
-  config.api_key = API_KEY;
+  // Firebase connect
   config.database_url = DATABASE_URL;
-
-  auth.user.email = USER_EMAIL;
-  auth.user.password = USER_PASSWORD;
-
   Firebase.begin(&config, &auth);
-  Firebase.reconnectNetwork(true);
+  Firebase.reconnectWiFi(true);
+
+  // Stream listener setup
+  if (!Firebase.RTDB.beginStream(&fbdo, "/esp32_devices/esp_001/unlock_signal")) {
+    Serial.printf("Stream error: %s\n", fbdo.errorReason().c_str());
+  }
+  Firebase.RTDB.setStreamCallback(&fbdo, streamCallback, streamTimeoutCallback);
 }
 
 void loop() {
-  // Read LED status from Firebase
-  if (Firebase.RTDB.getInt(&fbdo, "/ESP32/LED_Status")) {
-    int ledState = fbdo.intData();
-    digitalWrite(LED_PIN, ledState == 1 ? HIGH : LOW);
-    Serial.print("LED Status: ");
-    Serial.println(ledState);
-  } else {
-    Serial.print("Failed to get LED status: ");
-    Serial.println(fbdo.errorReason());
+  // Sensor reading
+  bool irState = digitalRead(IR_SENSOR); // LOW = object detected
+  bool currentPresence = (irState == LOW);
+
+  if (currentPresence != umbrellaPresent) {
+    umbrellaPresent = currentPresence;
+    Serial.print("Umbrella presence changed: ");
+    Serial.println(umbrellaPresent ? "YES" : "NO");
+
+    // Update Firebase sensor data
+    Firebase.RTDB.setBool(&fbdo, "/esp32_devices/esp_001/sensor_data/umbrella_present", umbrellaPresent);
+
+    // Play sound if umbrella removed
+    if (!umbrellaPresent) {
+      dfPlayer.play(2); // Sound 2 - umbrella removed
+      Serial.println("Umbrella removed - Sound 2 played");
+    }
   }
-  delay(1000);
+
+  delay(500);
 }
 
+// ====================== Firebase Stream Callbacks ======================
 
+// When unlock_signal changes
+void streamCallback(FirebaseStream data) {
+  Serial.println("📡 Firebase Data Changed:");
+  Serial.printf("Path: %s\n", data.dataPath().c_str());
+  Serial.printf("Value: %s\n", data.stringData().c_str());
 
+  unlockSignal = data.stringData();
 
+  if (unlockSignal == "on") {
+    unlockUmbrella();
+  } else if (unlockSignal == "off") {
+    lockUmbrella();
+  }
+}
 
+void streamTimeoutCallback(bool timeout) {
+  if (timeout) Serial.println("⚠️ Stream timeout, reconnecting...");
+  if (!fbdo.httpConnected()) Serial.printf("HTTP error: %s\n", fbdo.errorReason().c_str());
+}
 
+// ====================== Actions ======================
 
+void unlockUmbrella() {
+  Serial.println("🔓 Unlocking Umbrella...");
+  digitalWrite(RELAY_PIN, HIGH);
+  digitalWrite(RED_LED, LOW);
+  digitalWrite(GREEN_LED, HIGH);
+  dfPlayer.play(1); // Sound 1 - unlock sound
+  Firebase.RTDB.setString(&fbdo, "/umbrellas/umb_101/lock_state", "unlocked");
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
+void lockUmbrella() {
+  Serial.println("🔒 Locking Umbrella...");
+  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RED_LED, HIGH);
+  digitalWrite(GREEN_LED, LOW);
+  Firebase.RTDB.setString(&fbdo, "/umbrellas/umb_101/lock_state", "locked");
+}
