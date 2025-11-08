@@ -1,0 +1,137 @@
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <DFRobotDFPlayerMini.h>
+
+// WiFi credentials
+#define WIFI_SSID "Alamin"
+#define WIFI_PASSWORD "01788392063"
+
+// Firebase configuration
+#define API_KEY ""
+#define DATABASE_URL "https://ledproject-esp-default-rtdb.firebaseio.com/"
+
+// Firebase objects
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+// DFPlayer Mini
+HardwareSerial dfSerial(2); // UART2: RX2=35, TX2=32
+DFRobotDFPlayerMini player;
+
+// Pin configuration
+#define RELAY_PIN 25
+#define RED_LED_PIN 26
+#define GREEN_LED_PIN 27
+#define IR_SENSOR_PIN 33
+
+// Variables
+bool relayState = false; // false = locked, true = unlocked
+unsigned long relayOnTime = 0;
+const unsigned long AUTO_LOCK_DELAY = 12000; // 12 seconds
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  pinMode(IR_SENSOR_PIN, INPUT);
+
+  digitalWrite(RELAY_PIN, HIGH);   // Initially locked
+  digitalWrite(RED_LED_PIN, HIGH);
+  digitalWrite(GREEN_LED_PIN, LOW);
+
+  // WiFi connect
+  Serial.print("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ WiFi Connected!");
+
+  // DFPlayer init
+  dfSerial.begin(9600, SERIAL_8N1, 35, 32);
+  if (player.begin(dfSerial)) {
+    Serial.println("🎵 DFPlayer Ready!");
+    player.volume(25);
+    player.play(1); // Play 001.mp3 on WiFi connected
+  } else {
+    Serial.println("❌ DFPlayer Init Failed!");
+  }
+
+  // Firebase config
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  Serial.println("⏳ Firebase signing in...");
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("✅ Firebase Sign-In Successful!");
+  } else {
+    Serial.printf("❌ Firebase Sign-In Failed: %s\n", config.signer.signupError.message.c_str());
+  }
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+  delay(2000);
+}
+
+void loop() {
+  // Read relay command from Firebase
+  if (Firebase.ready() && Firebase.RTDB.getInt(&fbdo, "/relay_status")) {
+    int relayCmd = fbdo.intData();
+
+    // LOW → Unlock (start 12-sec timer)
+    if (relayCmd == 0 && !relayState) {
+      unlockUmbrella();
+    }
+    // HIGH → Lock immediately
+    else if (relayCmd == 1 && relayState) {
+      lockUmbrella();
+    }
+  }
+
+  // Auto-lock after 12 seconds from unlock
+  if (relayState && (millis() - relayOnTime >= AUTO_LOCK_DELAY)) {
+    lockUmbrella();
+  }
+
+  // IR sensor status update
+  int irStatus = digitalRead(IR_SENSOR_PIN);
+  String umbrellaStatus = (irStatus == HIGH) ? "empty" : "available";
+  Firebase.RTDB.setString(&fbdo, "/ir_sensor_status", umbrellaStatus);
+
+  delay(500);
+}
+
+// Unlock Umbrella (LOW → Unlock)
+void unlockUmbrella() {
+  relayState = true;   // Unlocked
+  relayOnTime = millis(); // Start 12-sec timer
+
+  digitalWrite(RELAY_PIN, LOW);     // Relay LOW → unlock
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, LOW);
+  Serial.println("🔓 Umbrella Unlocked");
+
+  Firebase.RTDB.setInt(&fbdo, "/relay_status", 0);
+  Firebase.RTDB.setString(&fbdo, "/system_status", "Unlocked");
+
+  if (player.available()) player.play(2); // Play sound 002
+}
+
+// Lock Umbrella (HIGH → Lock)
+void lockUmbrella() {
+  relayState = false;    // Locked
+
+  digitalWrite(RELAY_PIN, HIGH);    // Relay HIGH → lock
+  digitalWrite(RED_LED_PIN, HIGH);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  Serial.println("🔒 Umbrella Locked");
+
+  Firebase.RTDB.setInt(&fbdo, "/relay_status", 1);
+  Firebase.RTDB.setString(&fbdo, "/system_status", "Locked");
+
+  if (player.available()) player.play(3); // Play sound 003
+}
