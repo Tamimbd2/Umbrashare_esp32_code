@@ -1,0 +1,127 @@
+1️⃣ Firebase Firestore Database Structure
+1. users (Main Collection)
+
+প্রত্যেক ব্যবহারকারী UID অনুযায়ী ডকুমেন্ট পাবে।
+
+users
+   └── uid_12345
+         ├── name: "Mahabub Tamim"
+         ├── email: "tamim@gmail.com"
+         ├── NID: "1234567890"
+         ├── balance: 150
+         ├── total_rent: 8
+         ├── created_at: Timestamp
+         ├── rental_history (sub-collection)
+         │      ├── rental_001
+         │      │     ├── station_name: "Campus Gate"
+         │      │     ├── umbrella_code: "UMB123"
+         │      │     ├── start_time: Timestamp
+         │      │     ├── duration: 2  // hours
+         │      │     └── status: "active" / "complete"
+         │      └── rental_002 ...
+         ├── wallet (sub-collection)
+         │      ├── transaction_001
+         │      │     ├── type: "topup" / "payment"
+         │      │     ├── amount: 100
+         │      │     ├── payment_method: "Bkash" / "Nagad" / "Rocket"
+         │      │     ├── time: Timestamp
+         │      │     └── status: "completed"
+         │      └── transaction_002 ...
+         └── qr_scan_history (sub-collection)
+                ├── scan_001
+                │     ├── umbrella_code: "UMB123"
+                │     ├── station_name: "Campus Gate"
+                │     ├── scan_time: Timestamp
+                │     └── action: "rent" / "return"
+                └── scan_002 ...
+
+2. reports (Separate Collection)
+reports
+   └── report_001
+         ├── user_id: uid_12345
+         ├── report_type: "Missing Umbrella" / "Damaged Umbrella"
+         ├── description: "Umbrella broken"
+         ├── photo_url: "https://firebasestorage..."
+         ├── station_name: "Campus Gate"
+         ├── time: Timestamp
+         └── status: "pending" / "resolved"
+
+3. stations (Optional: Umbrella Stand Info)
+stations
+   └── station_01
+         ├── name: "Campus Gate"
+         ├── total_slots: 10
+         ├── available_slots: 6
+         ├── status: "online" / "offline"
+         └── last_update: Timestamp
+
+2️⃣ Data Flow (Get/Post)
+Create Account
+await FirebaseFirestore.instance.collection("users").doc(uid).set({
+  "name": name,
+  "email": email,
+  "NID": nid,
+  "balance": 0,
+  "total_rent": 0,
+  "created_at": FieldValue.serverTimestamp(),
+});
+
+Add Rental History
+await FirebaseFirestore.instance
+    .collection("users")
+    .doc(uid)
+    .collection("rental_history")
+    .add({
+      "station_name": stationName,
+      "umbrella_code": umbrellaCode,
+      "start_time": FieldValue.serverTimestamp(),
+      "duration": 0,
+      "status": "active",
+    });
+
+Update Wallet / Topup
+await FirebaseFirestore.instance
+    .collection("users")
+    .doc(uid)
+    .collection("wallet")
+    .add({
+      "type": "topup",
+      "amount": amount,
+      "payment_method": method, // Bkash/Nagad/Rocket
+      "time": FieldValue.serverTimestamp(),
+      "status": "completed"
+    });
+
+await FirebaseFirestore.instance.collection("users").doc(uid)
+    .update({"balance": FieldValue.increment(amount)});
+
+QR Scan History
+await FirebaseFirestore.instance
+    .collection("users")
+    .doc(uid)
+    .collection("qr_scan_history")
+    .add({
+      "umbrella_code": umbrellaCode,
+      "station_name": stationName,
+      "scan_time": FieldValue.serverTimestamp(),
+      "action": "rent"
+    });
+
+Submit Report
+await FirebaseFirestore.instance.collection("reports").add({
+  "user_id": uid,
+  "report_type": type,
+  "description": description,
+  "photo_url": photoUrl,
+  "station_name": stationName,
+  "time": FieldValue.serverTimestamp(),
+  "status": "pending",
+});
+
+3️⃣ Notes
+
+Rental History, Wallet, QR Scan, Reports সব sub-collections রাখা হয়েছে যাতে User-wise access সহজ হয়।
+
+Stations আলাদা collection → ESP/Stand integration future-proof।
+
+Firestore rules দিয়ে user-only access enforce করতে হবে।
