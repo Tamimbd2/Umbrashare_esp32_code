@@ -1,1 +1,120 @@
 
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <DFRobotDFPlayerMini.h>
+
+// WiFi credentials
+#define WIFI_SSID "Alamin"
+#define WIFI_PASSWORD "01788392063"
+
+// Firebase config
+#define API_KEY "AIzaSyBntis9XQeLCtPA5vDCr30XenhGIAPO-5c"
+#define DATABASE_URL "https://ledproject-esp-default-rtdb.firebaseio.com/"
+
+// Firebase objects
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+// DFPlayer
+HardwareSerial dfSerial(2); // RX=35 TX=32
+DFRobotDFPlayerMini player;
+
+// Pins
+#define RELAY_PIN 25
+#define RED_LED 26
+#define GREEN_LED 27
+
+bool relayState = false; // false = OFF
+
+void blinkGreenLED() {
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(GREEN_LED, HIGH);
+    delay(200);
+    digitalWrite(GREEN_LED, LOW);
+    delay(200);
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(RED_LED, OUTPUT);
+  pinMode(GREEN_LED, OUTPUT);
+
+  digitalWrite(RELAY_PIN, HIGH); 
+  digitalWrite(RED_LED, HIGH);
+  digitalWrite(GREEN_LED, LOW);
+
+  // WiFi connect
+  Serial.print("Connecting WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println("\n✅ WiFi Connected!");
+
+  // Blink LED after WiFi connect
+  blinkGreenLED();
+
+  // DFPlayer init
+  dfSerial.begin(9600, SERIAL_8N1, 35, 32);
+  delay(500);
+
+  if (player.begin(dfSerial)) {
+    Serial.println("🎵 DFPlayer Ready!");
+    player.volume(25);
+  } else {
+    Serial.println("❌ DFPlayer Error!");
+  }
+
+  // Firebase setup
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  Firebase.signUp(&config, &auth, "", "");
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+}
+
+void loop() {
+  if (!Firebase.ready()) return;
+
+  // Relay control
+  if (Firebase.RTDB.getInt(&fbdo, "/relay_status")) {
+    int cmd = fbdo.intData();
+
+    // 0 = ON
+    if (cmd == 0 && !relayState) {
+      relayState = true;
+      digitalWrite(RELAY_PIN, LOW);
+      digitalWrite(RED_LED, LOW);
+      Serial.println("🔓 Relay ON");
+    }
+
+    // 1 = OFF
+    if (cmd == 1 && relayState) {
+      relayState = false;
+      digitalWrite(RELAY_PIN, HIGH);
+      digitalWrite(RED_LED, HIGH);
+      Serial.println("🔒 Relay OFF");
+    }
+  }
+
+  // Sound control
+  if (Firebase.RTDB.getInt(&fbdo, "/sound_play")) {
+    int sound = fbdo.intData();
+
+    if (sound >= 1 && sound <= 3) {
+      player.play(sound);
+      Serial.printf("🎵 Playing sound %d\n", sound);
+
+      // Reset sound trigger
+      Firebase.RTDB.setInt(&fbdo, "/sound_play", 0);
+    }
+  }
+
+  delay(200);
+}
